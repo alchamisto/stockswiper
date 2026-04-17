@@ -77,6 +77,21 @@
   .tf-chg.up { color: var(--green); }
   .tf-chg.down { color: var(--red); }
   .tf-wrap { position: relative; width: 100%; height: 70px; }
+  .intraday-section { border-top: 0.5px solid var(--border); padding-top: 24px; margin-bottom: 40px; }
+  .intraday-title { font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .intraday-subtitle { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
+  .intraday-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .intraday-table-wrap { overflow-x: auto; }
+  .intraday-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .intraday-table th { text-align: left; padding: 6px 10px; font-size: 11px; font-weight: 500; color: var(--text2); border-bottom: 0.5px solid var(--border); text-transform: uppercase; letter-spacing: 0.04em; }
+  .intraday-table td { padding: 6px 10px; border-bottom: 0.5px solid var(--border); color: var(--text); }
+  .intraday-table tr:last-child td { border-bottom: none; }
+  .intraday-table tr:hover td { background: var(--bg2); }
+  .bar-cell { width: 120px; }
+  .bar-bg { background: var(--bg3); border-radius: 3px; height: 6px; width: 100%; }
+  .bar-fill { background: #1d9e75; border-radius: 3px; height: 6px; }
+  .swing-up { color: var(--green); font-weight: 500; }
+  .swing-na { color: var(--text3); }
   .loading-screen { text-align: center; padding: 80px 20px; color: var(--text2); }
   .spinner { width: 32px; height: 32px; border: 2px solid var(--border); border-top-color: var(--text2); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -128,7 +143,7 @@
   </div>
   <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
   <div class="vol-wrap"><canvas id="volChart"></canvas></div>
-  <div class="rsi-label">RSI (14) — overbought &gt;70 · oversold &lt;30</div>
+  <div class="rsi-label">RSI (14) — overbought >70 · oversold <30</div>
   <div class="rsi-wrap"><canvas id="rsiChart"></canvas></div>
   <div class="analysis-box">
     <div class="analysis-title">Technical notes</div>
@@ -145,6 +160,27 @@
       <div class="tf-card"><div class="tf-header"><span class="tf-label">6 Month</span><span class="tf-chg" id="chg-6m">—</span></div><div class="tf-wrap"><canvas id="tf-6m"></canvas></div></div>
       <div class="tf-card"><div class="tf-header"><span class="tf-label">1 Year</span><span class="tf-chg" id="chg-1y">—</span></div><div class="tf-wrap"><canvas id="tf-1y"></canvas></div></div>
       <div class="tf-card"><div class="tf-header"><span class="tf-label">5 Year</span><span class="tf-chg" id="chg-5y">—</span></div><div class="tf-wrap"><canvas id="tf-5y"></canvas></div></div>
+    </div>
+  </div>
+
+  <div class="intraday-section">
+    <div class="intraday-title">Intraday swing profile — 30 day history</div>
+    <div class="intraday-subtitle" id="intraday-subtitle">Hourly candles · Max run-up before 50% retrace · Market hours only</div>
+    <div class="intraday-summary" id="intraday-summary"></div>
+    <div class="intraday-table-wrap">
+      <table class="intraday-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Max Run-Up</th>
+            <th>From</th>
+            <th>To (Peak)</th>
+            <th>Retrace Hit</th>
+            <th>Visual</th>
+          </tr>
+        </thead>
+        <tbody id="intraday-tbody"></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -391,6 +427,7 @@ function renderCharts(ticker) {
   });
 
   renderTimeframes(ticker);
+  renderIntradaySwings(ticker);
 }
 
 async function fetchYahoo(ticker) {
@@ -441,6 +478,107 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'ArrowRight') navigate(1);
   if (e.key === 'ArrowLeft') navigate(-1);
 });
+
+async function fetchIntraday(ticker) {
+  var now = Math.floor(Date.now()/1000);
+  var from = now - 86400 * 45;
+  var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + ticker + '?interval=1h&period1=' + from + '&period2=' + now + '&events=history';
+  var res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  var json = await res.json();
+  var result = json.chart.result[0];
+  var quote = result.indicators.quote[0];
+  var timestamps = result.timestamp;
+  var candles = [];
+  for (var i = 0; i < timestamps.length; i++) {
+    var d = new Date(timestamps[i] * 1000);
+    var hour = d.getUTCHours();
+    if (hour >= 13 && hour < 20) {
+      candles.push({
+        ts: timestamps[i],
+        date: (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2),
+        open: quote.open[i],
+        high: quote.high[i],
+        low: quote.low[i],
+        close: quote.close[i]
+      });
+    }
+  }
+  return candles;
+}
+
+function calcDaySwings(candles) {
+  var days = {};
+  for (var i = 0; i < candles.length; i++) {
+    var c = candles[i];
+    if (!days[c.date]) days[c.date] = [];
+    days[c.date].push(c);
+  }
+  var results = [];
+  var dates = Object.keys(days).sort();
+  dates = dates.slice(-30);
+  for (var di = 0; di < dates.length; di++) {
+    var date = dates[di];
+    var dc = days[date];
+    if (dc.length < 2) continue;
+    var maxSwing = 0, swingFrom = null, swingTo = null, retraceHit = false;
+    for (var i = 0; i < dc.length; i++) {
+      var trough = dc[i].low;
+      var peak = trough;
+      var peakIdx = i;
+      for (var j = i; j < dc.length; j++) {
+        if (dc[j].high > peak) { peak = dc[j].high; peakIdx = j; }
+      }
+      if (peak <= trough) continue;
+      var moveSize = peak - trough;
+      var retraceLevel = peak - moveSize * 0.5;
+      var didRetrace = false;
+      for (var k = peakIdx; k < dc.length; k++) {
+        if (dc[k].low <= retraceLevel) { didRetrace = true; break; }
+      }
+      var swingPct = ((peak - trough) / trough) * 100;
+      if (swingPct > maxSwing) {
+        maxSwing = swingPct; swingFrom = trough; swingTo = peak; retraceHit = didRetrace;
+      }
+    }
+    results.push({ date: date, swing: maxSwing, from: swingFrom, to: swingTo, retraceHit: retraceHit });
+  }
+  return results;
+}
+
+async function renderIntradaySwings(ticker) {
+  var tbody = document.getElementById('intraday-tbody');
+  var summary = document.getElementById('intraday-summary');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text3);padding:16px 10px;">Loading intraday data...</td></tr>';
+  summary.innerHTML = '';
+  try {
+    var candles = await fetchIntraday(ticker);
+    var swings = calcDaySwings(candles);
+    if (!swings.length) { tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text3);padding:16px 10px;">No intraday data available.</td></tr>'; return; }
+    var validSwings = swings.filter(function(s){ return s.swing > 0; });
+    var avg = validSwings.length ? validSwings.reduce(function(a,s){ return a+s.swing; }, 0) / validSwings.length : 0;
+    var maxAll = validSwings.length ? Math.max.apply(null, validSwings.map(function(s){ return s.swing; })) : 0;
+    var retraceCount = validSwings.filter(function(s){ return s.retraceHit; }).length;
+    summary.innerHTML =
+      '<div class="metric"><div class="metric-label">Avg Max Run-Up</div><div class="metric-value up">+' + avg.toFixed(2) + '%</div></div>' +
+      '<div class="metric"><div class="metric-label">Best Single Day</div><div class="metric-value up">+' + maxAll.toFixed(2) + '%</div></div>' +
+      '<div class="metric"><div class="metric-label">50% Retrace Rate</div><div class="metric-value">' + retraceCount + ' / ' + validSwings.length + ' days</div></div>';
+    var rows = '';
+    for (var i = swings.length - 1; i >= 0; i--) {
+      var s = swings[i];
+      var barWidth = maxAll > 0 ? Math.round((s.swing / maxAll) * 100) : 0;
+      var swingStr = s.swing > 0 ? ('+' + s.swing.toFixed(2) + '%') : '—';
+      var fromStr = s.from !== null ? '$' + s.from.toFixed(2) : '—';
+      var toStr = s.to !== null ? '$' + s.to.toFixed(2) : '—';
+      var retraceStr = s.retraceHit ? '<span style="color:var(--red);font-size:11px;">Yes</span>' : '<span style="color:var(--green);font-size:11px;">No</span>';
+      rows += '<tr><td>' + s.date + '</td><td class="' + (s.swing > 0 ? 'swing-up' : 'swing-na') + '">' + swingStr + '</td><td>' + fromStr + '</td><td>' + toStr + '</td><td>' + retraceStr + '</td><td class="bar-cell"><div class="bar-bg"><div class="bar-fill" style="width:' + barWidth + '%"></div></div></td></tr>';
+    }
+    tbody.innerHTML = rows;
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text3);padding:16px 10px;">Could not load intraday data: ' + e.message + '</td></tr>';
+  }
+}
 
 async function init() {
   const pillsEl = document.getElementById('ticker-list');
