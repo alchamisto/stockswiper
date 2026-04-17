@@ -253,7 +253,6 @@ function analyze(closes, volumes, ma10, ma20, rsi) {
   const lm10 = ma10[ma10.length-1], lm20 = ma20[ma20.length-1];
   const lrsi = rsi.filter(function(r){ return r !== null; }).slice(-1)[0];
   const avgVol = volumes.slice(-20).reduce(function(a,b){ return a+b; }, 0) / 20;
-  const lastVol = volumes[volumes.length-1];
   const ch5 = ((last - closes[closes.length-6]) / closes[closes.length-6] * 100).toFixed(1);
   const ch20 = closes.length > 20 ? ((last - closes[closes.length-21]) / closes[closes.length-21] * 100).toFixed(1) : 'N/A';
   const tags = [], bullets = [];
@@ -271,8 +270,8 @@ function analyze(closes, volumes, ma10, ma20, rsi) {
 
   if (lm10 > lm20) tags.push({l:'MA10 > MA20',t:'bull'});
 
-  if (pullback && lastVol < avgVol) { tags.push({l:'Low vol pullback',t:'bull'}); bullets.push('Pulling back on below-average volume — constructive.'); }
-  else if (pullback && lastVol > avgVol*1.4) { tags.push({l:'Heavy vol selloff',t:'bear'}); bullets.push('Pulling back on heavy volume — elevated selling pressure.'); }
+  if (pullback && volumes[volumes.length-1] < avgVol) { tags.push({l:'Low vol pullback',t:'bull'}); bullets.push('Pulling back on below-average volume — constructive.'); }
+  else if (pullback && volumes[volumes.length-1] > avgVol*1.4) { tags.push({l:'Heavy vol selloff',t:'bear'}); bullets.push('Pulling back on heavy volume — elevated selling pressure.'); }
   else if (pullback) { tags.push({l:'Pullback day',t:'neutral'}); bullets.push('Down day on normal volume.'); }
 
   if (lrsi !== null && lrsi !== undefined) {
@@ -310,11 +309,7 @@ function makeMiniChart(canvasId, closes, dates, chgElId) {
   tfCharts[canvasId] = new Chart(canvas, {
     type: 'line',
     data: { labels: dates, datasets: [{ data: closes, borderColor: color, borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: true, backgroundColor: bg }] },
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: false,
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
-      scales: { x: { display: false }, y: { display: false } }
-    }
+    options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } } }
   });
 }
 
@@ -496,11 +491,9 @@ async function fetchIntraday(ticker) {
     if (hour >= 13 && hour < 20) {
       candles.push({
         ts: timestamps[i],
-        date: (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2),
-        open: quote.open[i],
-        high: quote.high[i],
-        low: quote.low[i],
-        close: quote.close[i]
+        date: String(d.getFullYear()) + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'),
+        displayDate: (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2),
+        open: quote.open[i], high: quote.high[i], low: quote.low[i], close: quote.close[i]
       });
     }
   }
@@ -523,25 +516,17 @@ function calcDaySwings(candles) {
     if (dc.length < 2) continue;
     var maxSwing = 0, swingFrom = null, swingTo = null, retraceHit = false;
     for (var i = 0; i < dc.length; i++) {
-      var trough = dc[i].low;
-      var peak = trough;
-      var peakIdx = i;
-      for (var j = i; j < dc.length; j++) {
-        if (dc[j].high > peak) { peak = dc[j].high; peakIdx = j; }
-      }
+      var trough = dc[i].low, peak = trough, peakIdx = i;
+      for (var j = i; j < dc.length; j++) { if (dc[j].high > peak) { peak = dc[j].high; peakIdx = j; } }
       if (peak <= trough) continue;
       var moveSize = peak - trough;
       var retraceLevel = peak - moveSize * 0.5;
       var didRetrace = false;
-      for (var k = peakIdx; k < dc.length; k++) {
-        if (dc[k].low <= retraceLevel) { didRetrace = true; break; }
-      }
+      for (var k = peakIdx; k < dc.length; k++) { if (dc[k].low <= retraceLevel) { didRetrace = true; break; } }
       var swingPct = ((peak - trough) / trough) * 100;
-      if (swingPct > maxSwing) {
-        maxSwing = swingPct; swingFrom = trough; swingTo = peak; retraceHit = didRetrace;
-      }
+      if (swingPct > maxSwing) { maxSwing = swingPct; swingFrom = trough; swingTo = peak; retraceHit = didRetrace; }
     }
-    results.push({ date: date, swing: maxSwing, from: swingFrom, to: swingTo, retraceHit: retraceHit });
+    results.push({ date: date, displayDate: dc[0].displayDate, swing: maxSwing, from: swingFrom, to: swingTo, retraceHit: retraceHit });
   }
   return results;
 }
@@ -572,7 +557,7 @@ async function renderIntradaySwings(ticker) {
       var fromStr = s.from !== null ? '$' + s.from.toFixed(2) : '—';
       var toStr = s.to !== null ? '$' + s.to.toFixed(2) : '—';
       var retraceStr = s.retraceHit ? '<span style="color:var(--red);font-size:11px;">Yes</span>' : '<span style="color:var(--green);font-size:11px;">No</span>';
-      rows += '<tr><td>' + s.date + '</td><td class="' + (s.swing > 0 ? 'swing-up' : 'swing-na') + '">' + swingStr + '</td><td>' + fromStr + '</td><td>' + toStr + '</td><td>' + retraceStr + '</td><td class="bar-cell"><div class="bar-bg"><div class="bar-fill" style="width:' + barWidth + '%"></div></div></td></tr>';
+      rows += '<tr><td>' + s.displayDate + '</td><td class="' + (s.swing > 0 ? 'swing-up' : 'swing-na') + '">' + swingStr + '</td><td>' + fromStr + '</td><td>' + toStr + '</td><td>' + retraceStr + '</td><td class="bar-cell"><div class="bar-bg"><div class="bar-fill" style="width:' + barWidth + '%"></div></div></td></tr>';
     }
     tbody.innerHTML = rows;
   } catch(e) {
